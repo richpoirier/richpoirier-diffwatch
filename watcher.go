@@ -57,9 +57,13 @@ func NewWatcher(repos []Repo) (*Watcher, error) {
 	return w, nil
 }
 
-// addRepoWatches registers a repo's working tree and relevant .git paths.
+// addRepoWatches registers a repo's working tree (scoped to WatchPath) and relevant .git paths.
 func (w *Watcher) addRepoWatches(repo Repo) error {
-	return filepath.WalkDir(repo.Path, func(path string, d os.DirEntry, err error) error {
+	// Watch the git index/refs for changes (handles both normal repos and worktrees)
+	w.watchGitDir(repo)
+
+	// Walk only the WatchPath subtree for file changes
+	return filepath.WalkDir(repo.WatchPath, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable dirs
 		}
@@ -67,17 +71,13 @@ func (w *Watcher) addRepoWatches(repo Repo) error {
 			return nil
 		}
 
-		rel, _ := filepath.Rel(repo.Path, path)
-
-		// Handle .git: watch .git itself (for index changes) and .git/refs/**
-		if rel == ".git" {
-			w.fsw.Add(path)
-			w.watchGitRefs(path)
+		// Skip .git directories
+		if d.Name() == ".git" {
 			return filepath.SkipDir
 		}
 
-		// Skip hidden directories (other than repo root)
-		if strings.HasPrefix(d.Name(), ".") && path != repo.Path {
+		// Skip hidden directories (other than watch root)
+		if strings.HasPrefix(d.Name(), ".") && path != repo.WatchPath {
 			return filepath.SkipDir
 		}
 
@@ -89,6 +89,37 @@ func (w *Watcher) addRepoWatches(repo Repo) error {
 		w.fsw.Add(path)
 		return nil
 	})
+}
+
+// watchGitDir finds and watches the actual .git directory (handling worktrees).
+func (w *Watcher) watchGitDir(repo Repo) {
+	gitPath := filepath.Join(repo.Path, ".git")
+	info, err := os.Stat(gitPath)
+	if err != nil {
+		return
+	}
+
+	if info.IsDir() {
+		// Normal repo: .git is a directory
+		w.fsw.Add(gitPath)
+		w.watchGitRefs(gitPath)
+	} else {
+		// Worktree: .git is a file containing "gitdir: <path>"
+		data, err := os.ReadFile(gitPath)
+		if err != nil {
+			return
+		}
+		line := strings.TrimSpace(string(data))
+		if !strings.HasPrefix(line, "gitdir: ") {
+			return
+		}
+		gitDir := strings.TrimPrefix(line, "gitdir: ")
+		if !filepath.IsAbs(gitDir) {
+			gitDir = filepath.Join(repo.Path, gitDir)
+		}
+		w.fsw.Add(gitDir)
+		w.watchGitRefs(gitDir)
+	}
 }
 
 // watchGitRefs registers .git/refs and all its subdirectories for watching.
@@ -106,8 +137,12 @@ func (w *Watcher) watchGitRefs(gitDir string) {
 }
 
 // findRepo returns the repo that contains the given file path.
+// Matches against both the repo root (for .git events) and the watch path (for file events).
 func (w *Watcher) findRepo(path string) *Repo {
 	for i := range w.repos {
+		if strings.HasPrefix(path, w.repos[i].WatchPath+string(os.PathSeparator)) || path == w.repos[i].WatchPath {
+			return &w.repos[i]
+		}
 		if strings.HasPrefix(path, w.repos[i].Path+string(os.PathSeparator)) || path == w.repos[i].Path {
 			return &w.repos[i]
 		}
@@ -116,20 +151,50 @@ func (w *Watcher) findRepo(path string) *Repo {
 }
 
 // shouldIgnore returns true for .git internal paths that generate noise.
-// Only .git/index, .git/HEAD, and .git/refs/** are considered meaningful.
+// Only index, HEAD, and refs/** are considered meaningful.
 func (w *Watcher) shouldIgnore(path string) bool {
 	repo := w.findRepo(path)
 	if repo == nil {
 		return true
 	}
 
-	gitDir := filepath.Join(repo.Path, ".git")
-	if !strings.HasPrefix(path, gitDir+string(os.PathSeparator)) {
-		return false // outside .git, don't ignore
+	// Check if this is inside any known git directory
+	for _, gitDir := range w.resolveGitDirs(repo) {
+		if strings.HasPrefix(path, gitDir+string(os.PathSeparator)) || path == gitDir {
+			rel, _ := filepath.Rel(gitDir, path)
+			return rel != "." && rel != "index" && rel != "HEAD" && !strings.HasPrefix(rel, "refs")
+		}
 	}
 
-	rel, _ := filepath.Rel(gitDir, path)
-	return rel != "index" && rel != "HEAD" && !strings.HasPrefix(rel, "refs")
+	return false // outside .git, don't ignore
+}
+
+// resolveGitDirs returns the git directory paths for a repo (handling worktrees).
+func (w *Watcher) resolveGitDirs(repo *Repo) []string {
+	var dirs []string
+	gitPath := filepath.Join(repo.Path, ".git")
+	info, err := os.Stat(gitPath)
+	if err != nil {
+		return dirs
+	}
+	if info.IsDir() {
+		dirs = append(dirs, gitPath)
+	} else {
+		// Worktree: read the gitdir pointer
+		data, err := os.ReadFile(gitPath)
+		if err != nil {
+			return dirs
+		}
+		line := strings.TrimSpace(string(data))
+		if strings.HasPrefix(line, "gitdir: ") {
+			gitDir := strings.TrimPrefix(line, "gitdir: ")
+			if !filepath.IsAbs(gitDir) {
+				gitDir = filepath.Join(repo.Path, gitDir)
+			}
+			dirs = append(dirs, gitDir)
+		}
+	}
+	return dirs
 }
 
 // loop processes fsnotify events with debouncing.
@@ -146,17 +211,14 @@ func (w *Watcher) loop() {
 			}
 
 			// On Create events, register new directories for watching
-			// (but not inside .git)
+			// (only within watch paths, not inside .git)
 			if event.Has(fsnotify.Create) {
 				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
 					name := filepath.Base(event.Name)
 					if !strings.HasPrefix(name, ".") {
 						repo := w.findRepo(event.Name)
-						if repo != nil {
-							gitDir := filepath.Join(repo.Path, ".git")
-							if !strings.HasPrefix(event.Name, gitDir+string(os.PathSeparator)) {
-								w.fsw.Add(event.Name)
-							}
+						if repo != nil && strings.HasPrefix(event.Name, repo.WatchPath+string(os.PathSeparator)) {
+							w.fsw.Add(event.Name)
 						}
 					}
 				}

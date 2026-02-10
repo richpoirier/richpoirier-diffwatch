@@ -9,8 +9,9 @@ import (
 
 // Repo represents a single git repository.
 type Repo struct {
-	Name string // display name (relative path from discovery root, e.g. "shopify/billing")
-	Path string // absolute path to repo root
+	Name      string // display name (relative path from discovery root, e.g. "shopify/billing")
+	Path      string // absolute path to repo root
+	WatchPath string // absolute path to the subtree to watch (may equal Path)
 }
 
 // ChangedFile represents a file with uncommitted changes.
@@ -20,9 +21,9 @@ type ChangedFile struct {
 	Status string // M, A, D, R, ?, etc.
 }
 
-// DiscoverRepos walks root and returns all directories containing a .git directory.
-// It stops descending into a directory once .git is found (no nested repo discovery).
-// The repo display name is the path relative to root.
+// DiscoverRepos finds git repos starting from root. If root is inside a git repo
+// (or is one), it returns that repo with WatchPath scoped to root. Otherwise it
+// walks down looking for repos.
 func DiscoverRepos(root string) ([]Repo, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -34,12 +35,30 @@ func DiscoverRepos(root string) ([]Repo, error) {
 	// Check if root itself is a git repo
 	if isGitRepo(absRoot) {
 		repos = append(repos, Repo{
-			Name: filepath.Base(absRoot),
-			Path: absRoot,
+			Name:      filepath.Base(absRoot),
+			Path:      absRoot,
+			WatchPath: absRoot,
 		})
 		return repos, nil
 	}
 
+	// Check if root is inside a git repo (walk up to find repo root)
+	if repoRoot := findGitRoot(absRoot); repoRoot != "" {
+		name := filepath.Base(repoRoot)
+		// Include the subdirectory in the display name
+		rel, _ := filepath.Rel(repoRoot, absRoot)
+		if rel != "." {
+			name = name + "/" + rel
+		}
+		repos = append(repos, Repo{
+			Name:      name,
+			Path:      repoRoot,
+			WatchPath: absRoot,
+		})
+		return repos, nil
+	}
+
+	// Walk down looking for repos
 	err = filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip directories we can't read
@@ -58,8 +77,9 @@ func DiscoverRepos(root string) ([]Repo, error) {
 				rel = filepath.Base(path)
 			}
 			repos = append(repos, Repo{
-				Name: rel,
-				Path: path,
+				Name:      rel,
+				Path:      path,
+				WatchPath: path,
 			})
 			return filepath.SkipDir // don't look for nested repos
 		}
@@ -72,18 +92,39 @@ func DiscoverRepos(root string) ([]Repo, error) {
 	return repos, nil
 }
 
-// isGitRepo returns true if dir contains a .git subdirectory.
+// isGitRepo returns true if dir contains a .git entry (directory or worktree file).
 func isGitRepo(dir string) bool {
-	info, err := os.Stat(filepath.Join(dir, ".git"))
-	if err != nil {
-		return false
+	_, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil
+}
+
+// findGitRoot walks up from dir looking for a .git entry, returning the repo root
+// or "" if not found. Stops at filesystem root.
+func findGitRoot(dir string) string {
+	for {
+		if isGitRepo(dir) {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "" // reached filesystem root
+		}
+		dir = parent
 	}
-	return info.IsDir()
 }
 
 // GetChangedFiles runs `git status --porcelain` and returns changed files for a repo.
+// When WatchPath is a subdirectory of the repo root, only files under that subtree are returned.
 func GetChangedFiles(repo *Repo) ([]ChangedFile, error) {
-	cmd := exec.Command("git", "-C", repo.Path, "status", "--porcelain")
+	args := []string{"-C", repo.Path, "status", "--porcelain"}
+	// Scope git status to the watch subtree for large repos
+	if repo.WatchPath != repo.Path {
+		rel, err := filepath.Rel(repo.Path, repo.WatchPath)
+		if err == nil {
+			args = append(args, "--", rel)
+		}
+	}
+	cmd := exec.Command("git", args...)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
