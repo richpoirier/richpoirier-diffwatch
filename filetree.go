@@ -187,7 +187,7 @@ func (m *FileTreeModel) selectFileAtCursor() tea.Cmd {
 	}
 	file := files[item.fileIndex]
 	// Skip if already selected
-	if m.selected != nil && m.selected.Repo.Path == file.Repo.Path && m.selected.Path == file.Path {
+	if m.selected != nil && m.selected.Repo.WatchPath == file.Repo.WatchPath && m.selected.Path == file.Path {
 		return nil
 	}
 	m.selected = &file
@@ -200,7 +200,7 @@ func (m *FileTreeModel) selectFileAtCursor() tea.Cmd {
 func (m FileTreeModel) handleFilesChanged(msg FilesChangedMsg) (FileTreeModel, tea.Cmd) {
 	found := false
 	for i, rg := range m.repos {
-		if rg.Repo.Path == msg.Repo.Path {
+		if rg.Repo.WatchPath == msg.Repo.WatchPath {
 			m.repos[i].Files = msg.Files
 			found = true
 			break
@@ -227,7 +227,7 @@ func (m FileTreeModel) handleFilesChanged(msg FilesChangedMsg) (FileTreeModel, t
 		stillExists := false
 		for _, rg := range m.repos {
 			for _, f := range rg.Files {
-				if f.Repo.Path == m.selected.Repo.Path && f.Path == m.selected.Path {
+				if f.Repo.WatchPath == m.selected.Repo.WatchPath && f.Path == m.selected.Path {
 					stillExists = true
 					break
 				}

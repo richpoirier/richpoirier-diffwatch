@@ -51,10 +51,10 @@ func (w *Watcher) pollLoop() {
 
 				// Build a fingerprint of current state
 				fingerprint := fileFingerprint(files)
-				if fingerprint == prev[w.repos[i].Path] {
+				if fingerprint == prev[w.repos[i].WatchPath] {
 					continue // no change
 				}
-				prev[w.repos[i].Path] = fingerprint
+				prev[w.repos[i].WatchPath] = fingerprint
 
 				select {
 				case w.msgCh <- FilesChangedMsg{Repo: &w.repos[i], Files: files}:
