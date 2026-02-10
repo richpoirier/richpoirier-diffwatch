@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -345,9 +346,9 @@ func (m FileTreeModel) View() string {
 			}
 		}
 
-		// Fit line to panel width (truncate or pad)
+		// Hard truncate to panel width (preserving ANSI sequences)
 		if m.width > 0 {
-			line = lipgloss.NewStyle().Width(m.width).MaxWidth(m.width).Render(line)
+			line = truncateAnsi(line, m.width)
 		}
 
 		if i == m.cursor {
@@ -366,4 +367,54 @@ func (m FileTreeModel) View() string {
 	}
 
 	return result
+}
+
+// truncateAnsi truncates a string containing ANSI escape sequences to maxWidth
+// visible characters. ANSI sequences are passed through without counting toward width.
+func truncateAnsi(s string, maxWidth int) string {
+	var out strings.Builder
+	visible := 0
+	i := 0
+	for i < len(s) && visible < maxWidth {
+		if s[i] == '\x1b' {
+			// Pass through entire ANSI escape sequence
+			j := i + 1
+			if j < len(s) && s[j] == '[' {
+				j++
+				for j < len(s) && s[j] != 'm' {
+					j++
+				}
+				if j < len(s) {
+					j++ // include the 'm'
+				}
+			}
+			out.WriteString(s[i:j])
+			i = j
+		} else {
+			_, size := utf8.DecodeRuneInString(s[i:])
+			out.WriteString(s[i : i+size])
+			visible++
+			i += size
+		}
+	}
+	// Append any trailing ANSI reset sequences so colors don't bleed
+	for i < len(s) {
+		if s[i] == '\x1b' {
+			j := i + 1
+			if j < len(s) && s[j] == '[' {
+				j++
+				for j < len(s) && s[j] != 'm' {
+					j++
+				}
+				if j < len(s) {
+					j++
+				}
+			}
+			out.WriteString(s[i:j])
+			i = j
+		} else {
+			break
+		}
+	}
+	return out.String()
 }
