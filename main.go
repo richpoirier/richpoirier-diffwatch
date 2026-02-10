@@ -16,10 +16,48 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Parse args: paths to watch (default: ".")
-	paths := os.Args[1:]
+	args := os.Args[1:]
+
+	// Handle flags
+	if len(args) > 0 {
+		switch args[0] {
+		case "--help", "-h":
+			printUsage()
+			return
+		case "--list":
+			listProfiles()
+			return
+		case "--save":
+			if len(args) < 3 {
+				fmt.Fprintln(os.Stderr, "Usage: diffwatch --save <profile-name> <path>...")
+				os.Exit(1)
+			}
+			saveProfile(args[1], args[2:])
+			return
+		case "--delete":
+			if len(args) < 2 {
+				fmt.Fprintln(os.Stderr, "Usage: diffwatch --delete <profile-name>")
+				os.Exit(1)
+			}
+			deleteProfile(args[1])
+			return
+		}
+	}
+
+	// Resolve paths: check if single arg is a profile name
+	paths := args
+	if len(paths) == 1 {
+		if profilePaths := resolveProfile(paths[0]); profilePaths != nil {
+			paths = profilePaths
+		}
+	}
 	if len(paths) == 0 {
-		paths = []string{"."}
+		// Try "default" profile, fall back to "."
+		if profilePaths := resolveProfile("default"); profilePaths != nil {
+			paths = profilePaths
+		} else {
+			paths = []string{"."}
+		}
 	}
 
 	// Discover repos from all paths
@@ -55,4 +93,23 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func printUsage() {
+	fmt.Println(`diffwatch - watch git diffs across multiple repos
+
+Usage:
+  diffwatch [paths...]           Watch repos at the given paths
+  diffwatch <profile>            Load a saved profile
+  diffwatch                      Use "default" profile, or watch "."
+
+Profiles:
+  diffwatch --save <name> <path>...   Save a named profile
+  diffwatch --delete <name>           Delete a profile
+  diffwatch --list                    List saved profiles
+
+Examples:
+  diffwatch . ~/src/other-repo
+  diffwatch --save work . ~/src/other-repo
+  diffwatch work`)
 }

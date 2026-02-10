@@ -138,26 +138,21 @@ func (m FileTreeModel) updateNavigation(msg tea.KeyMsg) (FileTreeModel, tea.Cmd)
 		if m.cursor < len(items)-1 {
 			m.cursor++
 		}
+		return m, m.selectFileAtCursor()
 	case "k", "up":
 		if m.cursor > 0 {
 			m.cursor--
 		}
+		return m, m.selectFileAtCursor()
 	case "enter":
 		if m.cursor < len(items) {
 			item := items[m.cursor]
 			if item.isRepo {
 				m.repos[item.repoIndex].Collapsed = !m.repos[item.repoIndex].Collapsed
 				m.clampCursor()
-			} else {
-				files := m.filteredFiles(item.repoIndex)
-				if item.fileIndex < len(files) {
-					file := files[item.fileIndex]
-					m.selected = &file
-					return m, func() tea.Msg {
-						return FileSelectedMsg{File: file}
-					}
-				}
 			}
+			// For files, enter is now redundant since navigation auto-selects,
+			// but keep it as a no-op so users aren't confused.
 		}
 	case "c":
 		if m.cursor < len(items) {
@@ -172,6 +167,32 @@ func (m FileTreeModel) updateNavigation(msg tea.KeyMsg) (FileTreeModel, tea.Cmd)
 	}
 
 	return m, nil
+}
+
+// selectFileAtCursor returns a command to load the diff for the file at the current cursor position.
+// Returns nil if the cursor is on a repo header or the file is already selected.
+func (m *FileTreeModel) selectFileAtCursor() tea.Cmd {
+	items := m.visibleItems()
+	if m.cursor >= len(items) {
+		return nil
+	}
+	item := items[m.cursor]
+	if item.isRepo {
+		return nil
+	}
+	files := m.filteredFiles(item.repoIndex)
+	if item.fileIndex >= len(files) {
+		return nil
+	}
+	file := files[item.fileIndex]
+	// Skip if already selected
+	if m.selected != nil && m.selected.Repo.Path == file.Repo.Path && m.selected.Path == file.Path {
+		return nil
+	}
+	m.selected = &file
+	return func() tea.Msg {
+		return FileSelectedMsg{File: file}
+	}
 }
 
 // handleFilesChanged updates the tree with new file data for a repo.

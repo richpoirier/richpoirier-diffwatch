@@ -47,21 +47,23 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(m.initialScan(), m.watcher.WaitForChange())
 }
 
-// initialScan runs GetChangedFiles for all repos and sends results through the watcher channel.
+// initialScan runs GetChangedFiles for all repos concurrently.
 func (m *Model) initialScan() tea.Cmd {
-	return func() tea.Msg {
-		for i := range m.repos {
-			files, err := GetChangedFiles(&m.repos[i])
+	var cmds []tea.Cmd
+	for i := range m.repos {
+		repo := &m.repos[i]
+		cmds = append(cmds, func() tea.Msg {
+			files, err := GetChangedFiles(repo)
 			if err != nil || len(files) == 0 {
-				continue
+				return nil
 			}
 			return FilesChangedMsg{
-				Repo:  &m.repos[i],
+				Repo:  repo,
 				Files: files,
 			}
-		}
-		return nil
+		})
 	}
+	return tea.Batch(cmds...)
 }
 
 // Update implements tea.Model.
@@ -140,21 +142,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// refreshAll re-scans all repos and returns the first result as a message.
+// refreshAll re-scans all repos concurrently.
 func (m *Model) refreshAll() tea.Cmd {
-	return func() tea.Msg {
-		for i := range m.repos {
-			files, err := GetChangedFiles(&m.repos[i])
-			if err != nil {
-				continue
+	var cmds []tea.Cmd
+	for i := range m.repos {
+		repo := &m.repos[i]
+		cmds = append(cmds, func() tea.Msg {
+			files, err := GetChangedFiles(repo)
+			if err != nil || len(files) == 0 {
+				return nil
 			}
 			return FilesChangedMsg{
-				Repo:  &m.repos[i],
+				Repo:  repo,
 				Files: files,
 			}
-		}
-		return nil
+		})
 	}
+	return tea.Batch(cmds...)
 }
 
 // updateSizes recalculates sub-model dimensions.
