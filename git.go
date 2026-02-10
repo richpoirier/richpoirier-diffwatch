@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -116,7 +117,7 @@ func findGitRoot(dir string) string {
 // GetChangedFiles runs `git status --porcelain` and returns changed files for a repo.
 // When WatchPath is a subdirectory of the repo root, only files under that subtree are returned.
 func GetChangedFiles(repo *Repo) ([]ChangedFile, error) {
-	args := []string{"-C", repo.Path, "status", "--porcelain"}
+	args := []string{"-C", repo.Path, "status", "--porcelain", "--untracked-files=all"}
 	// Scope git status to the watch subtree for large repos
 	if repo.WatchPath != repo.Path {
 		rel, err := filepath.Rel(repo.Path, repo.WatchPath)
@@ -155,6 +156,10 @@ func GetChangedFiles(repo *Repo) ([]ChangedFile, error) {
 			Status: status,
 		})
 	}
+
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Path < files[j].Path
+	})
 
 	return files, nil
 }
