@@ -107,28 +107,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case FilesChangedMsg:
-		m.filetree, _ = m.filetree.Update(msg)
-
-		// Auto-select first file if nothing is selected
-		if m.filetree.selected == nil {
-			items := m.filetree.visibleItems()
-			for _, item := range items {
-				if !item.isRepo {
-					files := m.filetree.filteredFiles(item.repoIndex)
-					if item.fileIndex < len(files) {
-						file := files[item.fileIndex]
-						m.filetree.selected = &file
-						m.diffview.SetLoading()
-						return m, tea.Batch(
-							loadDiff(file),
-							m.watcher.WaitForChange(),
-						)
-					}
-				}
-			}
-		}
-
-		return m, m.watcher.WaitForChange()
+		var cmd tea.Cmd
+		m.filetree, cmd = m.filetree.Update(msg)
+		return m, tea.Batch(cmd, m.watcher.WaitForChange())
 
 	case FileSelectedMsg:
 		m.diffview.SetLoading()

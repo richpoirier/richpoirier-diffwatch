@@ -198,24 +198,76 @@ func GetDiff(file ChangedFile) (string, error) {
 		cmd = exec.Command("bash", "-c",
 			"git -C "+shellQuote(file.Repo.Path)+
 				" diff --no-index /dev/null "+shellQuote(absPath)+
-				" | delta --paging=never --color-only")
+				" | delta --paging=never --color-only --line-numbers --file-style=omit --hunk-header-style=omit")
 	} else {
 		cmd = exec.Command("bash", "-c",
 			"git -C "+shellQuote(file.Repo.Path)+
 				" diff -- "+shellQuote(file.Path)+
-				" | delta --paging=never --color-only")
+				" | delta --paging=never --color-only --line-numbers --file-style=omit --hunk-header-style=omit")
 	}
 
 	out, err := cmd.Output()
 	if err != nil {
 		// git diff --no-index returns exit code 1 when files differ, which is expected
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return string(out), nil
+			return stripDiffHeader(string(out)), nil
 		}
 		return "", err
 	}
 
-	return string(out), nil
+	return stripDiffHeader(string(out)), nil
+}
+
+// stripDiffHeader removes the git diff frontmatter (diff --git, index, mode, ---/+++ lines)
+// from the beginning of the output.
+func stripDiffHeader(s string) string {
+	lines := strings.Split(s, "\n")
+	start := 0
+	for start < len(lines) {
+		plain := stripAnsi(lines[start])
+		if strings.HasPrefix(plain, "diff --git ") ||
+			strings.HasPrefix(plain, "index ") ||
+			strings.HasPrefix(plain, "--- ") ||
+			strings.HasPrefix(plain, "+++ ") ||
+			strings.HasPrefix(plain, "new file mode") ||
+			strings.HasPrefix(plain, "old mode") ||
+			strings.HasPrefix(plain, "new mode") ||
+			strings.HasPrefix(plain, "deleted file mode") ||
+			strings.HasPrefix(plain, "similarity index") ||
+			strings.HasPrefix(plain, "rename from") ||
+			strings.HasPrefix(plain, "rename to") ||
+			plain == "" {
+			start++
+			continue
+		}
+		break
+	}
+	return strings.Join(lines[start:], "\n")
+}
+
+// stripAnsi removes ANSI escape sequences from a string for comparison purposes.
+func stripAnsi(s string) string {
+	var out strings.Builder
+	i := 0
+	for i < len(s) {
+		if s[i] == '\x1b' {
+			j := i + 1
+			if j < len(s) && s[j] == '[' {
+				j++
+				for j < len(s) && s[j] != 'm' {
+					j++
+				}
+				if j < len(s) {
+					j++
+				}
+			}
+			i = j
+		} else {
+			out.WriteByte(s[i])
+			i++
+		}
+	}
+	return out.String()
 }
 
 // shellQuote wraps a string in single quotes for safe shell interpolation.
