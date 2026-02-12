@@ -117,7 +117,7 @@ func findGitRoot(dir string) string {
 // GetChangedFiles runs `git status --porcelain` and returns changed files for a repo.
 // When WatchPath is a subdirectory of the repo root, only files under that subtree are returned.
 func GetChangedFiles(repo *Repo) ([]ChangedFile, error) {
-	args := []string{"-C", repo.Path, "status", "--porcelain", "--untracked-files=all"}
+	args := []string{"-C", repo.Path, "--no-optional-locks", "status", "--porcelain", "--untracked-files=all"}
 	// Scope git status to the watch subtree for large repos
 	if repo.WatchPath != repo.Path {
 		rel, err := filepath.Rel(repo.Path, repo.WatchPath)
@@ -197,12 +197,12 @@ func GetDiff(file ChangedFile) (string, error) {
 		absPath := filepath.Join(file.Repo.Path, file.Path)
 		cmd = exec.Command("bash", "-c",
 			"git -C "+shellQuote(file.Repo.Path)+
-				" diff --no-index /dev/null "+shellQuote(absPath)+
+				" --no-optional-locks diff --no-index /dev/null "+shellQuote(absPath)+
 				" | delta --paging=never --color-only --line-numbers --file-style=omit --hunk-header-style=omit")
 	} else {
 		cmd = exec.Command("bash", "-c",
 			"git -C "+shellQuote(file.Repo.Path)+
-				" diff -- "+shellQuote(file.Path)+
+				" --no-optional-locks diff -- "+shellQuote(file.Path)+
 				" | delta --paging=never --color-only --line-numbers --file-style=omit --hunk-header-style=omit")
 	}
 
